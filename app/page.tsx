@@ -24,7 +24,7 @@ export default function ChatPage() {
     {
       id: "1",
       content:
-        "Hello! I'm your Financial Assistant powered by Gemini AI. I can help you with financial questions, investment advice, budgeting tips, and more. You can also upload financial documents like bank statements, tax returns, or investment statements to analyze them together. What would you like to know?",
+        "Hello! I'm your Financial Assistant for FPTI project. I can help you with financial questions, investment advice, budgeting tips, and more. You can also upload financial documents like bank statements, tax returns, or investment statements to analyze them together. What would you like to know?",
       role: "assistant",
       timestamp: new Date(),
     },
