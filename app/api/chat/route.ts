@@ -41,39 +41,6 @@ interface RequestBody {
   documents?: UploadedDocument[]
 }
 
-// Helper function to sleep/wait
-const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
-
-// Helper function to retry with exponential backoff
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 2,
-  baseDelay: number = 1000
-): Promise<T> {
-  let lastError: Error | null = null
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn()
-    } catch (error) {
-      lastError = error as Error
-      
-      // Check if it's a rate limit error
-      if (error instanceof Error && error.message.includes('429')) {
-        const delay = baseDelay * Math.pow(2, attempt) // Exponential backoff
-        console.log(`Rate limit hit, retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`)
-        await sleep(delay)
-        continue
-      }
-      
-      // If it's not a rate limit error, throw immediately
-      throw error
-    }
-  }
-  
-  throw lastError
-}
-
 export async function POST(request: Request) {
   try {
     // Check if API key is configured
@@ -93,6 +60,8 @@ export async function POST(request: Request) {
     console.log("=== API Request ===")
     console.log("User message:", body.userMessage)
     console.log("Documents attached:", body.documents?.length || 0)
+    console.log("API Key present:", !!process.env.GEMINI_API_KEY)
+    console.log("API Key length:", process.env.GEMINI_API_KEY?.length || 0)
 
     let enhancedUserMessage = body.userMessage
 
@@ -119,7 +88,20 @@ export async function POST(request: Request) {
     }
 
     // Initialize Gemini AI
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+    let genAI;
+    try {
+      genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+      console.log("GoogleGenerativeAI initialized successfully")
+    } catch (error) {
+      console.error("Failed to initialize GoogleGenerativeAI:", error)
+      return Response.json(
+        { 
+          error: "Failed to initialize Gemini AI",
+          details: error instanceof Error ? error.message : "Unknown error"
+        },
+        { status: 500 },
+      )
+    }
 
     // Ensure conversation always starts with a user message for Gemini API compatibility
     const conversationHistory = body.messages
@@ -131,11 +113,24 @@ export async function POST(request: Request) {
 
     console.log("Conversation history length:", conversationHistory.length)
 
-    // Use gemini-1.5-flash for better rate limits (stable model)
-    const model = genAI.getGenerativeModel({
-      model: "gemini-1.5-flash",
-      systemInstruction: FINANCIAL_SYSTEM_PROMPT,
-    })
+    // Create model and chat
+    let model;
+    try {
+      model = genAI.getGenerativeModel({
+        model: "gemini-1.5-flash", // Stable model with better rate limits
+        systemInstruction: FINANCIAL_SYSTEM_PROMPT,
+      })
+      console.log("Model created successfully")
+    } catch (error) {
+      console.error("Failed to create model:", error)
+      return Response.json(
+        { 
+          error: "Failed to create Gemini model",
+          details: error instanceof Error ? error.message : "Unknown error"
+        },
+        { status: 500 },
+      )
+    }
 
     const chat =
       conversationHistory.length > 0
@@ -155,17 +150,41 @@ export async function POST(request: Request) {
 
     console.log("Sending message to Gemini...")
     
-    // Use retry logic for rate limit handling
-    const result = await retryWithBackoff(
-      async () => await chat.sendMessage(enhancedUserMessage),
-      2, // Max 2 retries
-      2000 // Start with 2 second delay
-    )
+    let result;
+    try {
+      result = await chat.sendMessage(enhancedUserMessage)
+      console.log("Received response from Gemini")
+    } catch (error) {
+      console.error("Error sending message to Gemini:", error)
+      
+      if (error instanceof Error) {
+        // Check for specific API errors
+        if (error.message.includes("API_KEY_INVALID") || error.message.includes("API key")) {
+          return Response.json(
+            { 
+              error: "Invalid Gemini API key. Please check your API key in .env.local",
+              details: error.message
+            },
+            { status: 401 },
+          )
+        }
+        
+        return Response.json(
+          { 
+            error: "Failed to get response from Gemini",
+            details: error.message
+          },
+          { status: 500 },
+        )
+      }
+      
+      throw error
+    }
 
     const response = result.response
     const reply = response.text()
     
-    console.log("Response received, length:", reply.length)
+    console.log("Response length:", reply.length)
     console.log("=== API Request Complete ===\n")
 
     return Response.json({ reply })
@@ -175,31 +194,12 @@ export async function POST(request: Request) {
 
     if (error instanceof Error) {
       console.error("Error message:", error.message)
-      
-      // Handle specific error types
-      if (error.message.includes('429') || error.message.includes('quota') || error.message.includes('rate limit')) {
-        return Response.json(
-          { 
-            error: "Rate limit exceeded. The Gemini API free tier has daily/hourly limits.",
-            details: "Please wait a moment and try again, or consider upgrading your API plan at https://ai.google.dev/pricing"
-          },
-          { status: 429 },
-        )
-      }
-      
-      if (error.message.includes('API_KEY_INVALID') || error.message.includes('API key')) {
-        return Response.json(
-          { 
-            error: "Invalid Gemini API key. Please check your API key in .env.local",
-            details: error.message
-          },
-          { status: 401 },
-        )
-      }
+      console.error("Error stack:", error.stack)
     }
+    console.error("===================\n")
 
     return Response.json({ 
-      error: "Failed to process your request. Please try again in a moment.",
+      error: "Failed to process your request. Please try again.",
       details: error instanceof Error ? error.message : "Unknown error"
     }, { status: 500 })
   }
