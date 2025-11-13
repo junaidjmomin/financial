@@ -12,6 +12,7 @@ export interface Message {
   timestamp: Date
 }
 
+// This interface must match the one in document-upload.tsx and message-input.tsx
 interface UploadedDocument {
   id: string
   name: string
@@ -26,7 +27,7 @@ export default function ChatPage() {
     {
       id: "1",
       content:
-        "Hello! I'm your Financial Assistant for FPTI project. I can help you with financial questions, investment advice, budgeting tips, and more. You can also upload financial documents like bank statements, tax returns, or investment statements to analyze them together. What would you like to know?",
+        "Hello! I'm your Financial Assistant. I can help you with financial questions, investment advice, budgeting tips, and more. You can also upload financial documents like bank statements, tax returns, or investment statements to analyze them together. What would you like to know?",
       role: "assistant",
       timestamp: new Date(),
     },
@@ -45,9 +46,12 @@ export default function ChatPage() {
   const handleSendMessage = async (content: string, documents: UploadedDocument[]) => {
     if (!content.trim()) return
 
+    console.log(`Sending message with ${documents.length} documents`)
+
+    // Display message with attachment info
     let messageContent = content
     if (documents.length > 0) {
-      messageContent += `\n\n[Documents attached: ${documents.map((d) => d.name).join(", ")}]`
+      messageContent += `\n\n📎 Attached: ${documents.map((d) => d.name).join(", ")}`
     }
 
     const userMessage: Message = {
@@ -61,6 +65,19 @@ export default function ChatPage() {
     setIsLoading(true)
 
     try {
+      console.log("Preparing API request...")
+      
+      // Prepare documents for API (remove the File object as it's not serializable)
+      const documentsForAPI = documents.map(doc => ({
+        id: doc.id,
+        name: doc.name,
+        size: doc.size,
+        type: doc.type,
+        content: doc.content
+      }))
+
+      console.log(`Sending ${documentsForAPI.length} documents to API`)
+
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: {
@@ -72,15 +89,20 @@ export default function ChatPage() {
             content: msg.content,
           })),
           userMessage: content,
-          documents: documents,
+          documents: documentsForAPI,
         }),
       })
 
       if (!response.ok) {
-        throw new Error("Failed to get response")
+        const errorData = await response.json().catch(() => ({ error: "Unknown error" }))
+        throw new Error(errorData.error || `HTTP error! status: ${response.status}`)
       }
 
       const data = await response.json()
+
+      if (!data.reply) {
+        throw new Error("No reply received from API")
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -92,10 +114,22 @@ export default function ChatPage() {
       setMessages((prev) => [...prev, assistantMessage])
     } catch (error) {
       console.error("Error:", error)
+      
+      let errorContent = "Sorry, I encountered an unexpected error. Please try again."
+      
+      if (error instanceof Error) {
+        if (error.message.includes("429") || error.message.includes("rate limit") || error.message.includes("quota")) {
+          errorContent = "⏳ Rate limit reached. The Gemini API has usage limits. Please wait a minute and try again, or check your API quota at https://ai.google.dev/gemini-api/docs/rate-limits"
+        } else if (error.message.includes("API key") || error.message.includes("401")) {
+          errorContent = "🔑 API key issue. Please check that your GEMINI_API_KEY is correctly set in your .env.local file."
+        } else {
+          errorContent = `Sorry, I encountered an error: ${error.message}`
+        }
+      }
+      
       const errorMessage: Message = {
         id: (Date.now() + 2).toString(),
-        content:
-          "Sorry, I encountered an error. Please make sure your Gemini API key is configured. Check the environment variables in your project settings.",
+        content: errorContent,
         role: "assistant",
         timestamp: new Date(),
       }
@@ -111,7 +145,7 @@ export default function ChatPage() {
 
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-4">
         <div className="max-w-3xl mx-auto w-full">
-          {messages.map((message, index) => (
+          {messages.map((message) => (
             <div key={message.id} className="message-enter">
               <ChatMessage message={message} />
             </div>
