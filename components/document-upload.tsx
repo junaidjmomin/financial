@@ -1,15 +1,16 @@
+
 "use client"
 
 import type React from "react"
-
 import { useState, useRef } from "react"
 import { Upload, X, File } from "lucide-react"
 
-interface UploadedDocument {
+export interface UploadedDocument {
   id: string
   name: string
   size: number
   type: string
+  content: string // Added: actual file content
 }
 
 interface DocumentUploadProps {
@@ -20,19 +21,67 @@ interface DocumentUploadProps {
 export default function DocumentUpload({ onDocumentsChange, disabled }: DocumentUploadProps) {
   const [documents, setDocuments] = useState<UploadedDocument[]>([])
   const [isDragActive, setIsDragActive] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleFiles = (files: FileList) => {
-    const newDocs = Array.from(files).map((file) => ({
-      id: Date.now().toString() + Math.random(),
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    }))
+  const readFileContent = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      
+      reader.onload = (e) => {
+        const content = e.target?.result as string
+        resolve(content)
+      }
+      
+      reader.onerror = () => {
+        reject(new Error(`Failed to read file: ${file.name}`))
+      }
 
-    const updatedDocs = [...documents, ...newDocs]
-    setDocuments(updatedDocs)
-    onDocumentsChange(updatedDocs)
+      // Read as text for most document types
+      if (file.type.includes('text') || 
+          file.name.endsWith('.txt') || 
+          file.name.endsWith('.csv') ||
+          file.name.endsWith('.json')) {
+        reader.readAsText(file)
+      } else {
+        // For binary files (PDF, DOCX, etc.), read as data URL
+        reader.readAsDataURL(file)
+      }
+    })
+  }
+
+  const handleFiles = async (files: FileList) => {
+    setIsProcessing(true)
+    
+    try {
+      const newDocs = await Promise.all(
+        Array.from(files).map(async (file) => {
+          try {
+            const content = await readFileContent(file)
+            return {
+              id: Date.now().toString() + Math.random(),
+              name: file.name,
+              size: file.size,
+              type: file.type,
+              content: content
+            }
+          } catch (error) {
+            console.error(`Error reading ${file.name}:`, error)
+            return null
+          }
+        })
+      )
+
+      // Filter out failed reads
+      const validDocs = newDocs.filter((doc): doc is UploadedDocument => doc !== null)
+      const updatedDocs = [...documents, ...validDocs]
+      setDocuments(updatedDocs)
+      onDocumentsChange(updatedDocs)
+    } catch (error) {
+      console.error("Error processing files:", error)
+    } finally {
+      setIsProcessing(false)
+    }
   }
 
   const handleDrag = (e: React.DragEvent) => {
@@ -49,11 +98,13 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
     e.preventDefault()
     e.stopPropagation()
     setIsDragActive(false)
-    handleFiles(e.dataTransfer.files)
+    if (!disabled && e.dataTransfer.files) {
+      handleFiles(e.dataTransfer.files)
+    }
   }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
+    if (e.target.files && !disabled) {
       handleFiles(e.target.files)
     }
   }
@@ -81,35 +132,45 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
         onDrop={handleDrop}
         className={`border-2 border-dashed rounded-lg p-4 transition-colors ${
           isDragActive ? "border-primary bg-primary/5" : "border-border"
-        } ${disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+        } ${disabled || isProcessing ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
       >
         <input
           ref={fileInputRef}
           type="file"
           multiple
           onChange={handleChange}
-          disabled={disabled}
-          accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.csv"
+          disabled={disabled || isProcessing}
+          accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.json"
           className="hidden"
         />
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={disabled}
+          disabled={disabled || isProcessing}
           className="w-full flex flex-col items-center gap-2 py-4 hover:opacity-80 transition-opacity disabled:cursor-not-allowed"
         >
           <Upload className="w-5 h-5 text-muted-foreground" />
           <div className="text-sm">
-            <span className="font-medium text-foreground">Click to upload</span>
-            <span className="text-muted-foreground"> or drag and drop</span>
+            {isProcessing ? (
+              <span className="font-medium text-foreground">Processing files...</span>
+            ) : (
+              <>
+                <span className="font-medium text-foreground">Click to upload</span>
+                <span className="text-muted-foreground"> or drag and drop</span>
+              </>
+            )}
           </div>
-          <span className="text-xs text-muted-foreground">PDF, TXT, DOC, DOCX, XLS, XLSX, CSV</span>
+          <span className="text-xs text-muted-foreground">
+            PDF, TXT, DOC, DOCX, XLS, XLSX, CSV, JSON
+          </span>
         </button>
       </div>
 
       {documents.length > 0 && (
         <div className="space-y-2">
-          <p className="text-sm font-medium text-foreground">Uploaded Documents ({documents.length})</p>
+          <p className="text-sm font-medium text-foreground">
+            Uploaded Documents ({documents.length})
+          </p>
           <div className="space-y-2 max-h-32 overflow-y-auto">
             {documents.map((doc) => (
               <div
