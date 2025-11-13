@@ -1,4 +1,3 @@
-
 "use client"
 
 import type React from "react"
@@ -10,7 +9,8 @@ export interface UploadedDocument {
   name: string
   size: number
   type: string
-  content: string // Added: actual file content
+  content: string
+  file: File
 }
 
 interface DocumentUploadProps {
@@ -30,40 +30,40 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
       
       reader.onload = (e) => {
         const content = e.target?.result as string
+        console.log(`File ${file.name} read successfully, content length:`, content.length)
         resolve(content)
       }
       
       reader.onerror = () => {
+        console.error(`Failed to read file: ${file.name}`)
         reject(new Error(`Failed to read file: ${file.name}`))
       }
 
-      // Read as text for most document types
-      if (file.type.includes('text') || 
-          file.name.endsWith('.txt') || 
-          file.name.endsWith('.csv') ||
-          file.name.endsWith('.json')) {
-        reader.readAsText(file)
-      } else {
-        // For binary files (PDF, DOCX, etc.), read as data URL
-        reader.readAsDataURL(file)
-      }
+      // Always read as text for txt and csv files
+      console.log(`Reading file: ${file.name}, type: ${file.type}`)
+      reader.readAsText(file)
     })
   }
 
   const handleFiles = async (files: FileList) => {
     setIsProcessing(true)
+    console.log(`Processing ${files.length} files...`)
     
     try {
       const newDocs = await Promise.all(
         Array.from(files).map(async (file) => {
           try {
+            console.log(`Starting to read: ${file.name}`)
             const content = await readFileContent(file)
+            console.log(`Successfully read ${file.name}, content preview:`, content.substring(0, 100))
+            
             return {
               id: Date.now().toString() + Math.random(),
               name: file.name,
               size: file.size,
               type: file.type,
-              content: content
+              content: content,
+              file: file
             }
           } catch (error) {
             console.error(`Error reading ${file.name}:`, error)
@@ -72,8 +72,9 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
         })
       )
 
-      // Filter out failed reads
       const validDocs = newDocs.filter((doc): doc is UploadedDocument => doc !== null)
+      console.log(`Successfully processed ${validDocs.length} documents`)
+      
       const updatedDocs = [...documents, ...validDocs]
       setDocuments(updatedDocs)
       onDocumentsChange(updatedDocs)
@@ -140,7 +141,7 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
           multiple
           onChange={handleChange}
           disabled={disabled || isProcessing}
-          accept=".pdf,.txt,.doc,.docx,.xls,.xlsx,.csv,.json"
+          accept=".txt,.csv,.json"
           className="hidden"
         />
         <button
@@ -161,7 +162,7 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
             )}
           </div>
           <span className="text-xs text-muted-foreground">
-            PDF, TXT, DOC, DOCX, XLS, XLSX, CSV, JSON
+            TXT, CSV, JSON files
           </span>
         </button>
       </div>
@@ -181,7 +182,9 @@ export default function DocumentUpload({ onDocumentsChange, disabled }: Document
                   <File className="w-4 h-4 text-primary flex-shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium text-foreground truncate">{doc.name}</p>
-                    <p className="text-xs text-muted-foreground">{formatFileSize(doc.size)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatFileSize(doc.size)} • Content loaded: {doc.content.length} chars
+                    </p>
                   </div>
                 </div>
                 <button
