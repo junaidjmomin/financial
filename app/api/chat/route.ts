@@ -19,7 +19,8 @@ Guidelines:
 - Include specific examples and scenarios when helpful
 - Ask clarifying questions to provide personalized advice
 - Stay focused on financial topics; politely redirect non-financial questions
-- When documents are referenced, analyze them in the context of the user's financial questions
+- When documents are provided, carefully analyze their content and reference specific details in your responses
+- Extract key financial data from documents and provide insights
 
 Keep responses concise but informative (2-3 paragraphs typically).`
 
@@ -33,6 +34,7 @@ interface UploadedDocument {
   name: string
   size: number
   type: string
+  content: string
 }
 
 interface RequestBody {
@@ -45,6 +47,8 @@ export async function POST(request: Request) {
   try {
     const body: RequestBody = await request.json()
 
+    console.log("Received request with documents:", body.documents?.length || 0)
+
     if (!process.env.GEMINI_API_KEY) {
       return Response.json(
         { error: "GEMINI_API_KEY is not configured. Please add it to your environment variables." },
@@ -53,9 +57,27 @@ export async function POST(request: Request) {
     }
 
     let enhancedUserMessage = body.userMessage
+
+    // Process documents and add their content to the message
     if (body.documents && body.documents.length > 0) {
-      const docList = body.documents.map((d) => `- ${d.name} (${d.size} bytes)`).join("\n")
-      enhancedUserMessage += `\n\nDocuments for context:\n${docList}\nPlease analyze these documents in relation to the question.`
+      console.log("Processing documents...")
+      
+      enhancedUserMessage += `\n\n📎 ATTACHED DOCUMENTS:\n\n`
+      
+      for (const doc of body.documents) {
+        console.log(`Document: ${doc.name}, content length: ${doc.content.length}`)
+        
+        enhancedUserMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
+        enhancedUserMessage += `📄 FILE: ${doc.name}\n`
+        enhancedUserMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+        enhancedUserMessage += doc.content
+        enhancedUserMessage += `\n\n`
+      }
+      
+      enhancedUserMessage += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n`
+      enhancedUserMessage += `Please analyze the above document(s) and answer this question:\n${body.userMessage}`
+      
+      console.log("Enhanced message length:", enhancedUserMessage.length)
     }
 
     // Ensure conversation always starts with a user message for Gemini API compatibility
@@ -67,7 +89,7 @@ export async function POST(request: Request) {
       }))
 
     const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash", // Updated from deprecated gemini-1.5-flash to current gemini-2.5-flash
+      model: "gemini-2.0-flash-exp",
       systemInstruction: FINANCIAL_SYSTEM_PROMPT,
     })
 
@@ -76,33 +98,44 @@ export async function POST(request: Request) {
         ? model.startChat({
             history: conversationHistory,
             generationConfig: {
-              maxOutputTokens: 1024,
+              maxOutputTokens: 2048,
               temperature: 0.7,
             },
           })
         : model.startChat({
             generationConfig: {
-              maxOutputTokens: 1024,
+              maxOutputTokens: 2048,
               temperature: 0.7,
             },
           })
 
+    console.log("Sending message to Gemini...")
     const result = await chat.sendMessage(enhancedUserMessage)
 
     const response = result.response
     const reply = response.text()
+    
+    console.log("Received response from Gemini, length:", reply.length)
 
     return Response.json({ reply })
   } catch (error) {
     console.error("Chat error:", error)
 
-    if (error instanceof Error && error.message.includes("API key")) {
-      return Response.json(
-        { error: "Invalid or missing GEMINI_API_KEY. Please check your environment variables." },
-        { status: 401 },
-      )
+    if (error instanceof Error) {
+      console.error("Error message:", error.message)
+      console.error("Error stack:", error.stack)
+      
+      if (error.message.includes("API key")) {
+        return Response.json(
+          { error: "Invalid or missing GEMINI_API_KEY. Please check your environment variables." },
+          { status: 401 },
+        )
+      }
     }
 
-    return Response.json({ error: "Failed to process your request. Please try again." }, { status: 500 })
+    return Response.json({ 
+      error: "Failed to process your request. Please try again.",
+      details: error instanceof Error ? error.message : "Unknown error"
+    }, { status: 500 })
   }
 }
